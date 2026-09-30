@@ -1,0 +1,26 @@
+name: LINE Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send-line:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send test message to LINE
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+        run: |
+          curl -X POST \
+            https://api.line.me/v2/bot/message/broadcast \
+            -H "Authorization: Bearer ${LINE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "messages": [
+                {
+                  "type": "text",
+                  "text": "🔔 IR速報BOT\n\nテスト通知です！\nGitHub Actionsから正常にLINEへ送信できました。"
+                }
+              ]
+            }'
