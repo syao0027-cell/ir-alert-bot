@@ -4,36 +4,321 @@ on:
   workflow_dispatch:
 
   schedule:
+    # 日本時間 07:00
     - cron: '0 7 * * *'
       timezone: 'Asia/Tokyo'
 
+    # 日本時間 13:00
     - cron: '0 13 * * *'
       timezone: 'Asia/Tokyo'
 
+    # 日本時間 17:00
     - cron: '0 17 * * *'
       timezone: 'Asia/Tokyo'
 
+    # 日本時間 20:00
     - cron: '0 20 * * *'
       timezone: 'Asia/Tokyo'
+
+permissions:
+  contents: write
 
 jobs:
   ir-alert:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test LINE notification
+
+      # GitHubリポジトリを取得
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Python実行
+      - name: Check TDnet and send LINE
         env:
           LINE_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
         run: |
-          curl -X POST \
-            https://api.line.me/v2/bot/message/broadcast \
-            -H "Authorization: Bearer ${LINE_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "messages": [
-                {
-                  "type": "text",
-                  "text": "🔔 IR速報BOT\n\n定時実行テスト\n\nこの通知は7:00・13:00・17:00・20:00のスケジュールで実行されます。"
-                }
+
+          python - <<'PY'
+          import requests
+          import json
+          import os
+          from datetime import datetime, timedelta, timezone
+
+          # ==========================
+          # 設定
+          # ==========================
+
+          API_URL = "https://webapi.yanoshin.jp/webapi/tdnet/list/recent.json2?limit=300"
+
+          STATE_FILE = "seen_ir.json"
+
+          LINE_URL = "https://api.line.me/v2/bot/message/broadcast"
+
+          # 日本時間
+          JST = timezone(timedelta(hours=9))
+
+          now = datetime.now(JST)
+
+          # ==========================
+          # 悪材料キーワード
+          # ==========================
+
+          BAD_KEYWORDS = [
+              "下方修正",
+              "業績予想の下方修正",
+              "業績予想を下方修正",
+              "赤字転落",
+              "赤字",
+              "減益",
+              "減収",
+              "減配",
+              "配当予想の減額",
+              "無配",
+              "希薄化",
+              "公募増資",
+              "第三者割当",
+              "新株予約権",
+              "ストックオプション",
+              "CB",
+              "特別損失",
+              "債務超過",
+              "上場廃止",
+              "不正",
+              "訴訟",
+              "行政処分",
+              "業務停止",
+              "損害賠償"
+          ]
+
+          # ==========================
+          # 好材料キーワード
+          # ==========================
+
+          GOOD_KEYWORDS = [
+              "上方修正",
+              "業績予想を上方修正",
+              "増益",
+              "増収",
+              "増配",
+              "配当予想の増額",
+              "自社株買い",
+              "自己株式取得",
+              "大型受注",
+              "業務提携",
+              "資本提携",
+              "新製品",
+              "新規事業",
+              "特許取得",
+              "子会社化",
+              "株主優待制度の拡充"
+          ]
+
+          # ==========================
+          # 前回確認したIR
+          # ==========================
+
+          if os.path.exists(STATE_FILE):
+              try:
+                  with open(STATE_FILE, "r", encoding="utf-8") as f:
+                      seen = set(json.load(f))
+              except Exception:
+                  seen = set()
+          else:
+              seen = set()
+
+          # ==========================
+          # TDnet取得
+          # ==========================
+
+          print("TDnetを取得しています...")
+
+          response = requests.get(
+              API_URL,
+              timeout=30
+          )
+
+          response.raise_for_status()
+
+          data = response.json()
+
+          items = data.get("items", [])
+
+          print(f"取得件数: {len(items)}")
+
+          # ==========================
+          # 新しいIRを抽出
+          # ==========================
+
+          new_items = []
+
+          for item in items:
+
+              ir_id = str(item.get("id", ""))
+
+              if not ir_id:
+                  continue
+
+              if ir_id in seen:
+                  continue
+
+              new_items.append(item)
+
+          print(f"新規IR: {len(new_items)}件")
+
+          # ==========================
+          # 判定
+          # ==========================
+
+          notifications = []
+
+          for item in new_items:
+
+              title = item.get("title", "")
+              company_code = item.get("company_code", "")
+              company_name = item.get("company_name", "")
+              pubdate = item.get("pubdate", "")
+              document_url = item.get("document_url", "")
+
+              # タイトルを結合して判定
+              text = title
+
+              bad_matches = [
+                  keyword
+                  for keyword in BAD_KEYWORDS
+                  if keyword in text
               ]
-            }'
+
+              good_matches = [
+                  keyword
+                  for keyword in GOOD_KEYWORDS
+                  if keyword in text
+              ]
+
+              # ==========================
+              # 悪材料
+              # ==========================
+
+              if bad_matches:
+
+                  message = (
+                      "🔴 IR速報【悪材料候補】\n\n"
+                      f"{company_code} {company_name}\n"
+                      f"{pubdate}\n\n"
+                      f"{title}\n\n"
+                      f"⚠️ 判定キーワード：{', '.join(bad_matches[:3])}\n\n"
+                      f"📎 IR資料\n"
+                      f"{document_url}\n\n"
+                      "※自動判定です。投資判断の前に原文をご確認ください。"
+                  )
+
+                  notifications.append(message)
+
+              # ==========================
+              # 好材料
+              # ==========================
+
+              elif good_matches:
+
+                  message = (
+                      "🟢 IR速報【好材料候補】\n\n"
+                      f"{company_code} {company_name}\n"
+                      f"{pubdate}\n\n"
+                      f"{title}\n\n"
+                      f"📈 判定キーワード：{', '.join(good_matches[:3])}\n\n"
+                      f"📎 IR資料\n"
+                      f"{document_url}\n\n"
+                      "※自動判定です。投資判断の前に原文をご確認ください。"
+                  )
+
+                  notifications.append(message)
+
+          # ==========================
+          # LINE送信
+          # ==========================
+
+          def send_line(message):
+
+              headers = {
+                  "Authorization": f"Bearer {os.environ['LINE_TOKEN']}",
+                  "Content-Type": "application/json"
+              }
+
+              payload = {
+                  "messages": [
+                      {
+                          "type": "text",
+                          "text": message[:4900]
+                      }
+                  ]
+              }
+
+              r = requests.post(
+                  LINE_URL,
+                  headers=headers,
+                  json=payload,
+                  timeout=30
+              )
+
+              r.raise_for_status()
+
+          # ==========================
+          # 通知
+          # ==========================
+
+          if notifications:
+
+              print(f"LINE通知: {len(notifications)}件")
+
+              for message in notifications:
+
+                  print(message)
+
+                  send_line(message)
+
+          else:
+
+              print("通知対象のIRはありません。")
+
+          # ==========================
+          # 取得済みIDを保存
+          # ==========================
+
+          for item in new_items:
+
+              ir_id = str(item.get("id", ""))
+
+              if ir_id:
+                  seen.add(ir_id)
+
+          # 最大1000件まで保存
+          seen_list = list(seen)[-1000:]
+
+          with open(
+              STATE_FILE,
+              "w",
+              encoding="utf-8"
+          ) as f:
+
+              json.dump(
+                  seen_list,
+                  f,
+                  ensure_ascii=False,
+                  indent=2
+              )
+
+          print("IR履歴を保存しました。")
+
+          PY
+
+      # 状態ファイルをGitHubに保存
+      - name: Save IR history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add seen_ir.json
+
+          git diff --cached --quiet || git commit -m "Update IR history"
+
+          git push
