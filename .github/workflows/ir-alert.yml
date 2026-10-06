@@ -1,0 +1,39 @@
+name: IR Alert Bot
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: '0 7 * * *'
+      timezone: 'Asia/Tokyo'
+
+    - cron: '0 13 * * *'
+      timezone: 'Asia/Tokyo'
+
+    - cron: '0 17 * * *'
+      timezone: 'Asia/Tokyo'
+
+    - cron: '0 20 * * *'
+      timezone: 'Asia/Tokyo'
+
+jobs:
+  ir-alert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test LINE notification
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+        run: |
+          curl -X POST \
+            https://api.line.me/v2/bot/message/broadcast \
+            -H "Authorization: Bearer ${LINE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "messages": [
+                {
+                  "type": "text",
+                  "text": "🔔 IR速報BOT\n\n定時実行テスト\n\nこの通知は7:00・13:00・17:00・20:00のスケジュールで実行されます。"
+                }
+              ]
+            }'
