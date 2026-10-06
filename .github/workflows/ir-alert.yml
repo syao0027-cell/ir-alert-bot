@@ -233,7 +233,7 @@ jobs:
 
                   notifications.append(message)
 
-          # ==========================
+                   # ==========================
           # LINE送信
           # ==========================
 
@@ -262,23 +262,102 @@ jobs:
 
               r.raise_for_status()
 
+
           # ==========================
-          # 通知
+          # IRを分類
           # ==========================
 
-          if notifications:
+          good_notifications = []
+          bad_notifications = []
 
-              print(f"LINE通知: {len(notifications)}件")
+          for item in new_items:
 
-              for message in notifications:
+              title = item.get("title", "")
+              company_code = item.get("company_code", "")
+              company_name = item.get("company_name", "")
+              pubdate = item.get("pubdate", "")
+              document_url = item.get("document_url", "")
 
-                  print(message)
+              text = title
 
-                  send_line(message)
+              bad_matches = [
+                  keyword
+                  for keyword in BAD_KEYWORDS
+                  if keyword in text
+              ]
+
+              good_matches = [
+                  keyword
+                  for keyword in GOOD_KEYWORDS
+                  if keyword in text
+              ]
+
+              # 悪材料
+              if bad_matches:
+
+                  message = (
+                      f"{company_code} {company_name}\n"
+                      f"{title}\n"
+                      f"🕐 {pubdate}\n"
+                      f"⚠️ {', '.join(bad_matches[:3])}\n"
+                      f"📎 {document_url}"
+                  )
+
+                  bad_notifications.append(message)
+
+              # 好材料
+              elif good_matches:
+
+                  message = (
+                      f"{company_code} {company_name}\n"
+                      f"{title}\n"
+                      f"🕐 {pubdate}\n"
+                      f"📈 {', '.join(good_matches[:3])}\n"
+                      f"📎 {document_url}"
+                  )
+
+                  good_notifications.append(message)
+
+
+          # ==========================
+          # LINEメッセージを1通にまとめる
+          # ==========================
+
+          sections = []
+
+          if good_notifications:
+
+              sections.append(
+                  "🟢 有望IR\n\n" +
+                  "\n\n".join(good_notifications)
+              )
+
+          if bad_notifications:
+
+              sections.append(
+                  "🔴 悪材料IR\n\n" +
+                  "\n\n".join(bad_notifications)
+              )
+
+
+          if sections:
+
+              message = (
+                  f"🔔 IR速報 {now.strftime('%H:%M')}\n\n"
+                  +
+                  "\n\n━━━━━━━━━━━━━━\n\n".join(sections)
+                  +
+                  "\n\n\n※自動判定です。投資判断の前にIR原文をご確認ください。"
+              )
+
+              print(message)
+
+              send_line(message)
 
           else:
 
               print("通知対象のIRはありません。")
+
 
           # ==========================
           # 取得済みIDを保存
@@ -308,17 +387,3 @@ jobs:
               )
 
           print("IR履歴を保存しました。")
-
-          PY
-
-      # 状態ファイルをGitHubに保存
-      - name: Save IR history
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add seen_ir.json
-
-          git diff --cached --quiet || git commit -m "Update IR history"
-
-          git push
