@@ -26,21 +26,24 @@ permissions:
 
 jobs:
   ir-alert:
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # --------------------------------------------------
+      # ==========================================================
       # GitHubリポジトリを取得
-      # --------------------------------------------------
+      # ==========================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # --------------------------------------------------
-      # IR取得・判定・LINE通知
-      # --------------------------------------------------
-      - name: Fetch and analyze IR
+      # ==========================================================
+      # PythonでIR取得・判定・LINE通知
+      # ==========================================================
+
+      - name: Fetch TDnet and send LINE
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
 
@@ -50,15 +53,14 @@ jobs:
 
           import json
           import os
-          import re
           import urllib.request
           import urllib.error
           from datetime import datetime, timezone, timedelta
 
 
-          # ============================================================
-          # 基本設定
-          # ============================================================
+          # ==========================================================
+          # 設定
+          # ==========================================================
 
           API_URL = (
               "https://webapi.yanoshin.jp/"
@@ -67,50 +69,67 @@ jobs:
 
           SEEN_FILE = "seen_ir.json"
 
-          LINE_URL = "https://api.line.me/v2/bot/message/broadcast"
+          LINE_URL = (
+              "https://api.line.me/"
+              "v2/bot/message/broadcast"
+          )
 
           JST = timezone(timedelta(hours=9))
 
 
-          # ============================================================
+          print("")
+          print("========================================")
+          print("        IR ALERT BOT START")
+          print("========================================")
+          print("")
+
+
+          # ==========================================================
+          # 現在時刻
+          # ==========================================================
+
+          now = datetime.now(JST)
+
+          print(
+              "実行時刻:",
+              now.strftime("%Y-%m-%d %H:%M:%S"),
+              "JST"
+          )
+
+          print("")
+
+
+          # ==========================================================
           # 好材料キーワード
-          #
-          # score:
-          #   ＋5  非常に強い好材料
-          #   ＋4  強い好材料
-          #   ＋3  好材料
-          #   ＋2  中程度
-          #   ＋1  軽微
-          # ============================================================
+          # ==========================================================
 
           GOOD_KEYWORDS = {
 
-              # 業績関連
+              # 業績
               "上方修正": 5,
               "業績予想を上方修正": 5,
               "業績予想の上方修正": 5,
               "利益予想の上方修正": 5,
-              "業績予想の修正（上方": 5,
 
               "増益": 3,
               "増収": 3,
               "黒字転換": 5,
               "黒字化": 5,
 
-              # 配当関連
+              # 配当
               "増配": 5,
               "配当予想の増額": 5,
               "配当予想を増額": 5,
               "復配": 5,
               "記念配当": 3,
 
-              # 自社株関連
+              # 自社株
               "自社株買い": 5,
               "自己株式取得": 5,
               "自己株式の取得": 5,
               "自己株式取得に係る事項": 5,
 
-              # M&A・資本政策
+              # M&A・資本
               "TOB": 5,
               "公開買付け": 5,
               "株式公開買付け": 5,
@@ -124,8 +143,8 @@ jobs:
 
               # 受注
               "大型受注": 5,
-              "受注": 2,
               "大口受注": 5,
+              "大型案件": 4,
               "受注獲得": 4,
 
               # 新規事業
@@ -138,7 +157,6 @@ jobs:
               # 技術
               "特許取得": 3,
               "特許登録": 3,
-              "特許": 2,
 
               # 株主還元
               "株主優待制度の拡充": 4,
@@ -146,7 +164,7 @@ jobs:
               "株主優待拡充": 4,
               "優待拡充": 4,
 
-              # 財務改善
+              # 財務
               "債務超過解消": 4,
               "財務改善": 2,
               "資産売却": 2,
@@ -155,20 +173,13 @@ jobs:
           }
 
 
-          # ============================================================
+          # ==========================================================
           # 悪材料キーワード
-          #
-          # score:
-          #   -5  非常に強い悪材料
-          #   -4  強い悪材料
-          #   -3  悪材料
-          #   -2  中程度
-          #   -1  軽微
-          # ============================================================
+          # ==========================================================
 
           BAD_KEYWORDS = {
 
-              # 業績関連
+              # 業績
               "下方修正": -5,
               "業績予想を下方修正": -5,
               "業績予想の下方修正": -5,
@@ -198,14 +209,13 @@ jobs:
 
               # 損失
               "特別損失": -3,
-              "損失": -2,
 
               # 財務悪化
               "債務超過": -5,
               "資金繰り": -3,
               "財務制限条項": -3,
 
-              # 上場関連
+              # 上場
               "上場廃止": -5,
               "上場廃止申請": -5,
 
@@ -216,45 +226,43 @@ jobs:
               "虚偽": -5,
               "コンプライアンス違反": -5,
 
-              # 法務・行政
+              # 法務
               "訴訟": -4,
               "行政処分": -5,
               "業務停止": -5,
               "損害賠償": -4,
 
               # 人事
-              "辞任": -2,
               "解任": -3,
           }
 
 
-          # ============================================================
-          # 優先度判定
-          # ============================================================
+          # ==========================================================
+          # 優先度
+          # ==========================================================
 
-          def priority_from_score(score):
+          def get_priority(score):
 
-              absolute_score = abs(score)
+              value = abs(score)
 
-              if absolute_score >= 10:
+              if value >= 10:
                   return 5
 
-              elif absolute_score >= 7:
+              if value >= 7:
                   return 4
 
-              elif absolute_score >= 5:
+              if value >= 5:
                   return 3
 
-              elif absolute_score >= 3:
+              if value >= 3:
                   return 2
 
-              else:
-                  return 1
+              return 1
 
 
-          def priority_label(priority):
+          def priority_stars(priority):
 
-              labels = {
+              stars = {
                   5: "★★★★★",
                   4: "★★★★☆",
                   3: "★★★☆☆",
@@ -262,12 +270,15 @@ jobs:
                   1: "★☆☆☆☆",
               }
 
-              return labels.get(priority, "★☆☆☆☆")
+              return stars.get(
+                  priority,
+                  "★☆☆☆☆"
+              )
 
 
-          # ============================================================
-          # IR分類
-          # ============================================================
+          # ==========================================================
+          # IR分析
+          # ==========================================================
 
           def analyze_ir(title):
 
@@ -278,71 +289,120 @@ jobs:
               bad_score = 0
 
 
-              # --------------------------------------------------------
-              # 好材料判定
-              # --------------------------------------------------------
+              # ------------------------------------------------------
+              # 好材料
+              # ------------------------------------------------------
 
               for keyword, score in GOOD_KEYWORDS.items():
 
                   if keyword in title:
 
                       good_matches.append(keyword)
+
                       good_score += score
 
 
-              # --------------------------------------------------------
-              # 悪材料判定
-              # --------------------------------------------------------
+              # ------------------------------------------------------
+              # 悪材料
+              # ------------------------------------------------------
 
               for keyword, score in BAD_KEYWORDS.items():
 
                   if keyword in title:
 
                       bad_matches.append(keyword)
+
                       bad_score += score
 
 
-              # --------------------------------------------------------
-              # 特殊ボーナス
-              #
-              # 複数の強材料が同時に含まれている場合、
-              # 優先度を上げる
-              # --------------------------------------------------------
+              # ------------------------------------------------------
+              # 複合材料ボーナス
+              # ------------------------------------------------------
 
-              if "上方修正" in title and "増配" in title:
+              if (
+                  "上方修正" in title
+                  and "増配" in title
+              ):
+
                   good_score += 3
 
-              if "上方修正" in title and "自社株買い" in title:
+
+              if (
+                  "上方修正" in title
+                  and "自社株買い" in title
+              ):
+
                   good_score += 3
 
-              if "増配" in title and "自社株買い" in title:
+
+              if (
+                  "増配" in title
+                  and "自社株買い" in title
+              ):
+
                   good_score += 3
 
-              if "大型受注" in title and "上方修正" in title:
+
+              if (
+                  "大型受注" in title
+                  and "上方修正" in title
+              ):
+
                   good_score += 3
 
-              if "大型受注" in title and "増配" in title:
+
+              if (
+                  "大型受注" in title
+                  and "増配" in title
+              ):
+
                   good_score += 2
 
 
-              if "下方修正" in title and "減配" in title:
+              # ------------------------------------------------------
+              # 悪材料の複合
+              # ------------------------------------------------------
+
+              if (
+                  "下方修正" in title
+                  and "減配" in title
+              ):
+
                   bad_score -= 3
 
-              if "下方修正" in title and "赤字" in title:
+
+              if (
+                  "下方修正" in title
+                  and "赤字" in title
+              ):
+
                   bad_score -= 3
 
-              if "赤字" in title and "減配" in title:
+
+              if (
+                  "赤字" in title
+                  and "減配" in title
+              ):
+
                   bad_score -= 3
 
-              if "希薄化" in title and "公募増資" in title:
+
+              if (
+                  "希薄化" in title
+                  and "公募増資" in title
+              ):
+
                   bad_score -= 3
 
 
-              # --------------------------------------------------------
-              # 最終判定
-              # --------------------------------------------------------
+              # ------------------------------------------------------
+              # 判定
+              # ------------------------------------------------------
 
-              if good_score == 0 and bad_score == 0:
+              if (
+                  good_score == 0
+                  and bad_score == 0
+              ):
 
                   return {
                       "category": "neutral",
@@ -352,90 +412,143 @@ jobs:
                   }
 
 
-              # 好材料の方が強い
-              if good_score > abs(bad_score):
+              # 好材料優勢
 
-                  priority = priority_from_score(good_score)
+              if good_score > abs(bad_score):
 
                   return {
                       "category": "good",
                       "score": good_score,
-                      "priority": priority,
+                      "priority": get_priority(
+                          good_score
+                      ),
                       "matches": good_matches,
                   }
 
 
-              # 悪材料の方が強い
-              elif abs(bad_score) > good_score:
+              # 悪材料優勢
 
-                  priority = priority_from_score(bad_score)
+              if abs(bad_score) > good_score:
 
                   return {
                       "category": "bad",
                       "score": bad_score,
-                      "priority": priority,
+                      "priority": get_priority(
+                          bad_score
+                      ),
                       "matches": bad_matches,
                   }
 
 
               # 同点の場合
-              else:
+              # 強い悪材料が含まれる場合は悪材料優先
 
-                  # 強い悪材料が含まれている場合は悪材料優先
-                  if bad_score <= -5:
-
-                      priority = priority_from_score(bad_score)
-
-                      return {
-                          "category": "bad",
-                          "score": bad_score,
-                          "priority": priority,
-                          "matches": bad_matches,
-                      }
-
-                  priority = priority_from_score(good_score)
+              if bad_score <= -5:
 
                   return {
-                      "category": "good",
-                      "score": good_score,
-                      "priority": priority,
-                      "matches": good_matches,
+                      "category": "bad",
+                      "score": bad_score,
+                      "priority": get_priority(
+                          bad_score
+                      ),
+                      "matches": bad_matches,
                   }
 
 
-          # ============================================================
-          # JSON取得
-          # ============================================================
-
-          def fetch_json(url):
-
-              request = urllib.request.Request(
-                  url,
-                  headers={
-                      "User-Agent": "IR-Alert-Bot/1.0"
-                  }
-              )
-
-              with urllib.request.urlopen(request, timeout=30) as response:
-
-                  data = response.read().decode("utf-8")
-
-                  return json.loads(data)
+              return {
+                  "category": "good",
+                  "score": good_score,
+                  "priority": get_priority(
+                      good_score
+                  ),
+                  "matches": good_matches,
+              }
 
 
-          # ============================================================
-          # seen_ir.json 読み込み
-          # ============================================================
+          # ==========================================================
+          # TDnet取得
+          # ==========================================================
+
+          print("----------------------------------------")
+          print("1. TDnetデータ取得")
+          print("----------------------------------------")
+
+          request = urllib.request.Request(
+
+              API_URL,
+
+              headers={
+                  "User-Agent": "IR-Alert-Bot/1.0"
+              }
+          )
+
+
+          try:
+
+              with urllib.request.urlopen(
+                  request,
+                  timeout=30
+              ) as response:
+
+                  raw_data = response.read()
+
+                  data = json.loads(
+                      raw_data.decode("utf-8")
+                  )
+
+
+          except Exception as e:
+
+              print("")
+              print("❌ TDnet取得失敗")
+              print("エラー:", repr(e))
+              print("")
+
+              raise
+
+
+          items = data.get(
+              "items",
+              []
+          )
+
+
+          print(
+              f"✅ TDnet取得成功: {len(items)}件"
+          )
+
+          print("")
+
+
+          # ==========================================================
+          # seen_ir.json
+          # ==========================================================
+
+          print("----------------------------------------")
+          print("2. 重複チェック")
+          print("----------------------------------------")
+
 
           if os.path.exists(SEEN_FILE):
 
               try:
 
-                  with open(SEEN_FILE, "r", encoding="utf-8") as f:
+                  with open(
+                      SEEN_FILE,
+                      "r",
+                      encoding="utf-8"
+                  ) as f:
 
-                      seen_ids = set(json.load(f))
+                      seen_ids = set(
+                          str(x)
+                          for x in json.load(f)
+                      )
 
               except Exception:
+
+                  print(
+                      "⚠️ seen_ir.jsonを読み込めませんでした。"
+                  )
 
                   seen_ids = set()
 
@@ -444,326 +557,438 @@ jobs:
               seen_ids = set()
 
 
-          # ============================================================
-          # TDnet取得
-          # ============================================================
-
-          print("TDnetからIRを取得しています...")
-
-          try:
-
-              data = fetch_json(API_URL)
-
-          except Exception as e:
-
-              print("TDnet取得エラー:", e)
-
-              raise
+          print(
+              f"既読IR: {len(seen_ids)}件"
+          )
 
 
-          items = data.get("items", [])
-
-          print(f"取得件数: {len(items)}")
-
-
-          # ============================================================
-          # 新規IRだけ抽出
-          # ============================================================
+          # ==========================================================
+          # 新規IR抽出
+          # ==========================================================
 
           new_items = []
 
+
           for item in items:
 
-              ir_id = str(item.get("id", "")).strip()
+              ir_id = str(
+                  item.get("id", "")
+              ).strip()
+
 
               if not ir_id:
                   continue
 
+
               if ir_id in seen_ids:
                   continue
+
 
               new_items.append(item)
 
 
-          print(f"新規IR: {len(new_items)}件")
+          print(
+              f"✅ 新規IR: {len(new_items)}件"
+          )
+
+          print("")
 
 
-          # ============================================================
-          # 判定結果
-          # ============================================================
+          # ==========================================================
+          # 分類
+          # ==========================================================
+
+          print("----------------------------------------")
+          print("3. IR分析")
+          print("----------------------------------------")
+
 
           good_notifications = []
           bad_notifications = []
 
+          neutral_count = 0
+
 
           for item in new_items:
 
-              title = str(item.get("title", "")).strip()
-
-              company_code = str(
-                  item.get("company_code", "")
+              title = str(
+                  item.get(
+                      "title",
+                      ""
+                  )
               ).strip()
 
-              company_name = str(
-                  item.get("company_name", "")
-              ).strip()
-
-              pubdate = str(
-                  item.get("pubdate", "")
-              ).strip()
-
-              document_url = str(
-                  item.get("document_url", "")
-              ).strip()
-
-              # ----------------------------------------------
-              # 証券コード
-              #
-              # APIによって5桁で返る場合があるため、
-              # 先頭4桁/5桁の見た目をなるべく維持
-              # ----------------------------------------------
-
-              display_code = company_code
-
-              # ----------------------------------------------
-              # IR判定
-              # ----------------------------------------------
 
               result = analyze_ir(title)
 
-              category = result["category"]
 
-              if category == "neutral":
+              if result["category"] == "neutral":
+
+                  neutral_count += 1
+
                   continue
 
 
               record = {
-                  "id": str(item.get("id", "")),
+
+                  "id": str(
+                      item.get(
+                          "id",
+                          ""
+                      )
+                  ),
+
                   "title": title,
-                  "company_code": display_code,
-                  "company_name": company_name,
-                  "pubdate": pubdate,
-                  "document_url": document_url,
+
+                  "company_code": str(
+                      item.get(
+                          "company_code",
+                          ""
+                      )
+                  ).strip(),
+
+                  "company_name": str(
+                      item.get(
+                          "company_name",
+                          ""
+                      )
+                  ).strip(),
+
+                  "pubdate": str(
+                      item.get(
+                          "pubdate",
+                          ""
+                      )
+                  ).strip(),
+
+                  "document_url": str(
+                      item.get(
+                          "document_url",
+                          ""
+                      )
+                  ).strip(),
+
                   "score": result["score"],
+
                   "priority": result["priority"],
+
                   "matches": result["matches"],
               }
 
 
-              if category == "good":
+              if result["category"] == "good":
 
-                  good_notifications.append(record)
+                  good_notifications.append(
+                      record
+                  )
 
-              elif category == "bad":
+              elif result["category"] == "bad":
 
-                  bad_notifications.append(record)
+                  bad_notifications.append(
+                      record
+                  )
 
 
-          # ============================================================
-          # 優先度順に並び替え
-          #
-          # 優先度が同じ場合は公開時刻の新しい順
-          # ============================================================
+          # ==========================================================
+          # 優先度順
+          # ==========================================================
 
           good_notifications.sort(
+
               key=lambda x: (
                   x["priority"],
                   x["score"],
                   x["pubdate"],
               ),
+
               reverse=True
           )
 
 
           bad_notifications.sort(
+
               key=lambda x: (
                   x["priority"],
                   abs(x["score"]),
                   x["pubdate"],
               ),
+
               reverse=True
           )
 
 
           print(
-              f"好材料: {len(good_notifications)}件"
+              f"🟢 有望IR: {len(good_notifications)}件"
           )
 
           print(
-              f"悪材料: {len(bad_notifications)}件"
+              f"🔴 悪材料IR: {len(bad_notifications)}件"
           )
 
+          print(
+              f"⚪ 中立IR: {neutral_count}件"
+          )
 
-          # ============================================================
+          print("")
+
+
+          # ==========================================================
           # LINEメッセージ作成
-          # ============================================================
+          # ==========================================================
 
           sections = []
 
 
-          # ------------------------------------------------------------
-          # 好材料
-          # ------------------------------------------------------------
+          # ==========================================================
+          # 有望IR
+          # ==========================================================
 
           if good_notifications:
 
-              text = "🟢 有望IR\n\n"
+              text = "🟢 有望IR\n"
+
 
               for ir in good_notifications:
 
-                  text += "━━━━━━━━━━━━━━\n"
+                  text += (
+                      "\n━━━━━━━━━━━━━━\n"
+                  )
+
 
                   if ir["priority"] >= 5:
+
                       text += "🔥 最重要\n"
 
                   elif ir["priority"] >= 4:
+
                       text += "🟠 重要\n"
 
                   elif ir["priority"] >= 3:
+
                       text += "🟢 注目\n"
 
                   else:
+
                       text += "🟢 通常\n"
 
 
                   text += "\n"
 
-                  if ir["company_code"]:
+
+                  code = ir["company_code"]
+
+                  company = ir["company_name"]
+
+
+                  if code:
 
                       text += (
-                          f"{ir['company_code']} "
-                          f"{ir['company_name']}\n"
+                          f"{code} {company}\n"
                       )
 
                   else:
 
-                      text += f"{ir['company_name']}\n"
+                      text += (
+                          f"{company}\n"
+                      )
 
-
-                  text += f"{ir['title']}\n\n"
 
                   text += (
-                      f"📊 優先度："
-                      f"{priority_label(ir['priority'])}\n"
+                      f"{ir['title']}\n"
                   )
 
-                  if ir["matches"]:
 
-                      unique_matches = list(
-                          dict.fromkeys(ir["matches"])
+                  text += (
+                      "\n📊 優先度："
+                      + priority_stars(
+                          ir["priority"]
                       )
+                      + "\n"
+                  )
+
+
+                  matches = list(
+                      dict.fromkeys(
+                          ir["matches"]
+                      )
+                  )
+
+
+                  if matches:
 
                       text += (
                           "📈 "
-                          + "・".join(unique_matches[:5])
+                          + "・".join(
+                              matches[:5]
+                          )
                           + "\n"
                       )
+
 
                   if ir["pubdate"]:
 
                       text += (
-                          f"🕐 {ir['pubdate']}\n"
+                          "🕐 "
+                          + ir["pubdate"]
+                          + "\n"
                       )
+
 
                   if ir["document_url"]:
 
                       text += (
-                          f"📎 {ir['document_url']}\n"
+                          "📎 "
+                          + ir["document_url"]
+                          + "\n"
                       )
 
 
               sections.append(text)
 
 
-          # ------------------------------------------------------------
-          # 悪材料
-          # ------------------------------------------------------------
+          # ==========================================================
+          # 悪材料IR
+          # ==========================================================
 
           if bad_notifications:
 
-              text = "🔴 悪材料IR\n\n"
+              text = "🔴 悪材料IR\n"
+
 
               for ir in bad_notifications:
 
-                  text += "━━━━━━━━━━━━━━\n"
+                  text += (
+                      "\n━━━━━━━━━━━━━━\n"
+                  )
+
 
                   if ir["priority"] >= 5:
-                      text += "🚨 最重要悪材料\n"
+
+                      text += (
+                          "🚨 最重要悪材料\n"
+                      )
 
                   elif ir["priority"] >= 4:
-                      text += "🔴 重要悪材料\n"
+
+                      text += (
+                          "🔴 重要悪材料\n"
+                      )
 
                   elif ir["priority"] >= 3:
-                      text += "🟠 注目悪材料\n"
+
+                      text += (
+                          "🟠 注目悪材料\n"
+                      )
 
                   else:
-                      text += "🔴 通常悪材料\n"
+
+                      text += (
+                          "🔴 通常悪材料\n"
+                      )
 
 
                   text += "\n"
 
-                  if ir["company_code"]:
+
+                  code = ir["company_code"]
+
+                  company = ir["company_name"]
+
+
+                  if code:
 
                       text += (
-                          f"{ir['company_code']} "
-                          f"{ir['company_name']}\n"
+                          f"{code} {company}\n"
                       )
 
                   else:
 
-                      text += f"{ir['company_name']}\n"
+                      text += (
+                          f"{company}\n"
+                      )
 
-
-                  text += f"{ir['title']}\n\n"
 
                   text += (
-                      f"📊 優先度："
-                      f"{priority_label(ir['priority'])}\n"
+                      f"{ir['title']}\n"
                   )
 
-                  if ir["matches"]:
 
-                      unique_matches = list(
-                          dict.fromkeys(ir["matches"])
+                  text += (
+                      "\n📊 優先度："
+                      + priority_stars(
+                          ir["priority"]
                       )
+                      + "\n"
+                  )
+
+
+                  matches = list(
+                      dict.fromkeys(
+                          ir["matches"]
+                      )
+                  )
+
+
+                  if matches:
 
                       text += (
                           "⚠️ "
-                          + "・".join(unique_matches[:5])
+                          + "・".join(
+                              matches[:5]
+                          )
                           + "\n"
                       )
+
 
                   if ir["pubdate"]:
 
                       text += (
-                          f"🕐 {ir['pubdate']}\n"
+                          "🕐 "
+                          + ir["pubdate"]
+                          + "\n"
                       )
+
 
                   if ir["document_url"]:
 
                       text += (
-                          f"📎 {ir['document_url']}\n"
+                          "📎 "
+                          + ir["document_url"]
+                          + "\n"
                       )
 
 
               sections.append(text)
 
 
-          # ============================================================
+          # ==========================================================
           # LINE送信
-          #
-          # 1回の実行につき最大1通
-          # ============================================================
+          # ==========================================================
 
-          if sections:
+          print("----------------------------------------")
+          print("4. LINE通知")
+          print("----------------------------------------")
 
-              now = datetime.now(JST)
+
+          if not sections:
+
+              print(
+                  "ℹ️ 通知対象IRはありません。"
+              )
+
+              print(
+                  "➡️ LINE通知は行いません。"
+              )
+
+
+          else:
 
               header = (
                   "🔔 IR速報 "
                   + now.strftime("%H:%M")
-                  + "\n\n"
+                  + "\n"
               )
+
 
               footer = (
                   "\n━━━━━━━━━━━━━━\n"
@@ -771,69 +996,85 @@ jobs:
                   "投資判断の前にIR原文をご確認ください。"
               )
 
+
               message = (
                   header
-                  + "\n━━━━━━━━━━━━━━\n\n"
-                  + "\n\n".join(sections)
+                  + "\n"
+                  + "\n".join(sections)
                   + footer
               )
 
 
-              # LINEには長さ制限があるため、
-              # 長すぎる場合は安全に切る
-              #
-              # 重要度順に並んでいるので、
-              # 上位のIRを優先して残す
-              # --------------------------------------------------------
+              # ------------------------------------------------------
+              # LINEの文字数制限対策
+              # ------------------------------------------------------
 
-              MAX_LINE_LENGTH = 4800
+              MAX_LENGTH = 4800
 
-              if len(message) > MAX_LINE_LENGTH:
 
-                  message = (
-                      message[:MAX_LINE_LENGTH - 100]
-                      + "\n\n"
-                      + "⚠️ IR件数が多いため、一部を省略しています。"
-                      + footer
+              if len(message) > MAX_LENGTH:
+
+                  print(
+                      "⚠️ メッセージが長いため短縮します。"
                   )
 
 
-              print("LINE通知を送信します。")
+                  message = (
+                      message[:4500]
+                      + "\n\n"
+                      + "⚠️ IR件数が多いため一部省略"
+                      + footer
+                  )
 
 
               token = os.environ.get(
                   "LINE_CHANNEL_ACCESS_TOKEN"
               )
 
+
               if not token:
 
+                  print(
+                      "❌ LINE_CHANNEL_ACCESS_TOKEN がありません。"
+                  )
+
                   raise RuntimeError(
-                      "LINE_CHANNEL_ACCESS_TOKEN が設定されていません。"
+                      "LINE_CHANNEL_ACCESS_TOKEN が未設定です。"
                   )
 
 
               payload = {
+
                   "messages": [
+
                       {
                           "type": "text",
                           "text": message
                       }
+
                   ]
+
               }
 
 
               request = urllib.request.Request(
+
                   LINE_URL,
+
                   data=json.dumps(
                       payload,
                       ensure_ascii=False
                   ).encode("utf-8"),
+
                   headers={
-                      "Content-Type": "application/json",
-                      "Authorization": (
-                          "Bearer " + token
-                      )
+
+                      "Content-Type":
+                          "application/json",
+
+                      "Authorization":
+                          "Bearer " + token,
                   },
+
                   method="POST"
               )
 
@@ -845,66 +1086,77 @@ jobs:
                       timeout=30
                   ) as response:
 
+                      status = response.status
+
                       print(
-                          "LINE送信成功:",
-                          response.status
+                          f"✅ LINE送信成功"
                       )
+
+                      print(
+                          f"HTTP Status: {status}"
+                      )
+
 
               except urllib.error.HTTPError as e:
 
-                  error_body = e.read().decode(
+                  body = e.read().decode(
                       "utf-8",
                       errors="replace"
                   )
 
+
+                  print("")
+                  print("❌ LINE送信失敗")
                   print(
-                      "LINE送信エラー:",
-                      e.code,
-                      error_body
+                      "HTTP Status:",
+                      e.code
                   )
+                  print(
+                      "Response:",
+                      body
+                  )
+                  print("")
+
 
                   raise
 
 
-          else:
+          # ==========================================================
+          # seen_ir.json更新
+          # ==========================================================
 
-              print(
-                  "通知対象のIRはありません。"
-              )
+          print("----------------------------------------")
+          print("5. 既読データ保存")
+          print("----------------------------------------")
 
-              print(
-                  "LINE通知は行いません。"
-              )
-
-
-          # ============================================================
-          # 既読IRを保存
-          #
-          # neutralも含めて「取得済み」として保存する
-          # ============================================================
 
           for item in new_items:
 
               ir_id = str(
-                  item.get("id", "")
+                  item.get(
+                      "id",
+                      ""
+                  )
               ).strip()
+
 
               if ir_id:
 
                   seen_ids.add(ir_id)
 
 
-          # 最大1000件まで保持
-          #
-          # JSON上では順序を維持するため、
-          # 新しいIDを後ろに追加する
-          # ------------------------------------------------------------
+          # ----------------------------------------------------------
+          # 最大1000件
+          # ----------------------------------------------------------
 
-          current_ids = list(seen_ids)
+          seen_list = list(
+              seen_ids
+          )
 
-          if len(current_ids) > 1000:
 
-              current_ids = current_ids[-1000:]
+          if len(seen_list) > 1000:
+
+              seen_list = seen_list[-1000:]
 
 
           with open(
@@ -914,7 +1166,7 @@ jobs:
           ) as f:
 
               json.dump(
-                  current_ids,
+                  seen_list,
                   f,
                   ensure_ascii=False,
                   indent=2
@@ -922,30 +1174,44 @@ jobs:
 
 
           print(
-              f"{SEEN_FILE} を更新しました。"
+              f"保存件数: {len(seen_list)}件"
           )
 
-          print(
-              f"保存ID数: {len(current_ids)}"
-          )
+
+          print("")
+          print("========================================")
+          print("        IR ALERT BOT FINISHED")
+          print("========================================")
+          print("")
 
           PY
 
 
-      # --------------------------------------------------
+      # ==========================================================
       # seen_ir.jsonをGitHubに保存
-      # --------------------------------------------------
+      # ==========================================================
+
       - name: Save seen IR state
         run: |
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
 
           git add seen_ir.json
 
+
           if git diff --cached --quiet; then
-            echo "変更はありません。"
+
+            echo "seen_ir.jsonに変更はありません。"
+
           else
-            git commit -m "Update seen IR state"
+
+            git commit \
+              -m "Update seen IR state"
+
             git push
+
           fi
